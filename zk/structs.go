@@ -91,14 +91,14 @@ type ServerStats struct {
 }
 
 type requestHeader struct {
-	Xid    int32
-	Opcode int32
+	Xid    int32	// 4B
+	Opcode int32	// 4B
 }
 
 type responseHeader struct {
-	Xid  int32
-	Zxid int64
-	Err  ErrCode
+	Xid  int32		// 4B
+	Zxid int64		// 8B
+	Err  ErrCode	// 4B
 }
 
 type multiHeader struct {

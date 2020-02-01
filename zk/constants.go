@@ -35,12 +35,20 @@ const (
 	opWatcherEvent = -2
 )
 
+
+
+// 事件类型
 const (
+	// 节点创建
 	EventNodeCreated         EventType = 1
+	// 节点删除
 	EventNodeDeleted         EventType = 2
+	// 节点数据变更
 	EventNodeDataChanged     EventType = 3
+	// 子节点变更
 	EventNodeChildrenChanged EventType = 4
 
+	// session 事件
 	EventSession     EventType = -1
 	EventNotWatching EventType = -2
 )
@@ -58,20 +66,20 @@ var (
 
 const (
 	StateUnknown           State = -1
-	StateDisconnected      State = 0
-	StateConnecting        State = 1
+	StateDisconnected      State = 0		// 断连
+	StateConnecting        State = 1		// 连接中
 	StateAuthFailed        State = 4
 	StateConnectedReadOnly State = 5
 	StateSaslAuthenticated State = 6
 	StateExpired           State = -112
 
-	StateConnected  = State(100)
+	StateConnected  = State(100)			// 已连接
 	StateHasSession = State(101)
 )
 
 const (
-	FlagEphemeral = 1
-	FlagSequence  = 2
+	FlagEphemeral = 1 	// 临时节点
+	FlagSequence  = 2 	// 序列节点
 )
 
 var (

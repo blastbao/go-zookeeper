@@ -6,10 +6,13 @@ import (
 	"sync"
 )
 
-// DNSHostProvider is the default HostProvider. It currently matches
-// the Java StaticHostProvider, resolving hosts from DNS once during
-// the call to Init.  It could be easily extended to re-query DNS
-// periodically or if there is trouble connecting.
+// DNSHostProvider is the default HostProvider.
+//
+// It currently matches the Java StaticHostProvider,
+// resolving hosts from DNS once during the call to Init.
+//
+// It could be easily extended to re-query DNS periodically or if there is trouble connecting.
+//
 type DNSHostProvider struct {
 	mu         sync.Mutex // Protects everything, so we can add asynchronous updates later.
 	servers    []string

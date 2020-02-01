@@ -66,119 +66,195 @@ type authCreds struct {
 	auth   []byte
 }
 
+
+// Zxid: 为 zookeeper 维持的 id
+// xid: 为本地的 id
+//
+//
+//
 type Conn struct {
+
 	lastZxid         int64
+
 	sessionID        int64
-	state            State // must be 32-bit aligned
+	state            State 		// must be 32-bit aligned
+
 	xid              uint32
-	sessionTimeoutMs int32 // session timeout in milliseconds
+
+
+	sessionTimeoutMs int32 		// session timeout in milliseconds
+
 	passwd           []byte
 
 	dialer         Dialer
 	hostProvider   HostProvider
-	serverMu       sync.Mutex // protects server
-	server         string     // remember the address/port of the current server
+
+	serverMu       sync.Mutex 	// protects server
+	server         string     	// remember the address/port of the current server
+
+
 	conn           net.Conn
+
+
 	eventChan      chan Event
 	eventCallback  EventCallback // may be nil
+
 	shouldQuit     chan struct{}
+
 	pingInterval   time.Duration
 	recvTimeout    time.Duration
 	connectTimeout time.Duration
+
 	maxBufferSize  int
 
 	creds   []authCreds
 	credsMu sync.Mutex // protects server
 
+
+	// 待发送的请求
 	sendChan     chan *request
+
+	// 等待发送的请求缓存
 	requests     map[int32]*request // Xid -> pending request
 	requestsLock sync.Mutex
+
+	// 正在处理的 watchers
 	watchers     map[watchPathType][]chan Event
 	watchersLock sync.Mutex
+
+
 	closeChan    chan struct{} // channel to tell send loop stop
 
 	// Debug (used by unit tests)
 	reconnectLatch   chan struct{}
+
+
 	setWatchLimit    int
 	setWatchCallback func([]*setWatchesRequest)
+
+
 	// Debug (for recurring re-auth hang)
 	debugCloseRecvLoop bool
 	debugReauthDone    chan struct{}
 
+
 	logger  Logger
 	logInfo bool // true if information messages are logged; false if only errors are logged
+
 
 	buf []byte
 }
 
+
+
+
+
 // connOption represents a connection option.
 type connOption func(c *Conn)
 
+
+
 type request struct {
+
 	xid        int32
 	opcode     int32
 	pkt        interface{}
 	recvStruct interface{}
 	recvChan   chan response
 
-	// Because sending and receiving happen in separate go routines, there's
-	// a possible race condition when creating watches from outside the read
-	// loop. We must ensure that a watcher gets added to the list synchronously
+	// Because sending and receiving happen in separate go routines,
+	// there's a possible race condition when creating watches from outside the read loop.
+	//
+	// We must ensure that a watcher gets added to the list synchronously
 	// with the response from the server on any request that creates a watch.
 	// In order to not hard code the watch logic for each opcode in the recv
-	// loop the caller can use recvFunc to insert some synchronously code
-	// after a response.
+	// loop the caller can use recvFunc to insert some synchronously code after a response.
 	recvFunc func(*request, *responseHeader, error)
 }
+
 
 type response struct {
 	zxid int64
 	err  error
 }
 
+
+
 type Event struct {
+	// 事件类型
 	Type   EventType
+	// 状态
 	State  State
+	// 路径
 	Path   string // For non-session events, the path of the watched node.
+	// 错误信息
 	Err    error
+	// 服务信息
 	Server string // For connection events
 }
 
+
 // HostProvider is used to represent a set of hosts a ZooKeeper client should connect to.
+// HostProvider 被用于表示 zk client 应该连接到的一组 zk servers 主机地址。
+//
 // It is an analog of the Java equivalent:
 // http://svn.apache.org/viewvc/zookeeper/trunk/src/java/main/org/apache/zookeeper/client/HostProvider.java?view=markup
 type HostProvider interface {
+
 	// Init is called first, with the servers specified in the connection string.
+	// 首先调用 Init 函数，使用 `服务字符串(数组)` 作为参数。
 	Init(servers []string) error
+
 	// Len returns the number of servers.
 	Len() int
-	// Next returns the next server to connect to. retryStart will be true if we've looped through
-	// all known servers without Connected() being called.
+
+	// Next returns the next server to connect to.
+	// Next 返回下一个要连接的服务器地址。
+	//
+	// retryStart will be true if we've looped through all known servers without Connected() being called.
+	// 如果我们遍历完所有已知服务器而未调用 Connected() 标识任何节点可用，则 retryStart 将为 true 。
 	Next() (server string, retryStart bool)
+
 	// Notify the HostProvider of a successful connection.
+	// 通知 HostProvider 一个成功建立的连接。
 	Connected()
 }
 
-// ConnectWithDialer establishes a new connection to a pool of zookeeper servers
-// using a custom Dialer. See Connect for further information about session timeout.
+
+// ConnectWithDialer establishes a new connection to a pool of zookeeper servers using a custom Dialer.
+//
+//
+// See Connect for further information about session timeout.
+//
 // This method is deprecated and provided for compatibility: use the WithDialer option instead.
 func ConnectWithDialer(servers []string, sessionTimeout time.Duration, dialer Dialer) (*Conn, <-chan Event, error) {
+
+
 	return Connect(servers, sessionTimeout, WithDialer(dialer))
 }
 
-// Connect establishes a new connection to a pool of zookeeper
-// servers. The provided session timeout sets the amount of time for which
-// a session is considered valid after losing connection to a server. Within
-// the session timeout it's possible to reestablish a connection to a different
-// server and keep the same session. This is means any ephemeral nodes and
-// watches are maintained.
+
+
+
+
+// Connect establishes a new connection to a pool of zookeeper servers.
+//
+//
+//
+// The provided session timeout sets the amount of time for which
+// a session is considered valid after losing connection to a server.
+//
+// Within the session timeout it's possible to reestablish a connection to a different server and keep the same session.
+// This is means any ephemeral nodes and watches are maintained.
 func Connect(servers []string, sessionTimeout time.Duration, options ...connOption) (*Conn, <-chan Event, error) {
+
+	// 参数检查
 	if len(servers) == 0 {
 		return nil, nil, errors.New("zk: server list must not be empty")
 	}
 
+	// 参数校正，确保 addr = ip + ":" + port
 	srvs := make([]string, len(servers))
-
 	for i, addr := range servers {
 		if strings.Contains(addr, ":") {
 			srvs[i] = addr
@@ -187,13 +263,15 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 		}
 	}
 
-	// Randomize the order of the servers to avoid creating hotspots
-	stringShuffle(srvs)
+	// 混淆 srvs 顺序，避免出现请求热点
+	stringShuffle(srvs) 	// Randomize the order of the servers to avoid creating hotspots
 
+	//
 	ec := make(chan Event, eventChanSize)
+
 	conn := &Conn{
-		dialer:         net.DialTimeout,
-		hostProvider:   &DNSHostProvider{},
+		dialer:         net.DialTimeout,					// Dial connects to the address on the named network.
+		hostProvider:   &DNSHostProvider{},					//
 		conn:           nil,
 		state:          StateDisconnected,
 		eventChan:      ec,
@@ -213,20 +291,39 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 		option(conn)
 	}
 
+
+	// 初始化 hostProvider，它被用来维护 zk-client 应该连接到的一组 zk servers 主机地址。
 	if err := conn.hostProvider.Init(srvs); err != nil {
 		return nil, nil, err
 	}
 
+	// 设置 `网络连接超时` 为 `会话超时`
 	conn.setTimeouts(int32(sessionTimeout / time.Millisecond))
 
+
+	// 启动主 goroutine
 	go func() {
+
+		//
 		conn.loop()
+
+		// 将已经发送到 zk 的请求处理掉，直接报错: ErrClosing(Close之后, Conn就完事，程序也该关闭了)
 		conn.flushRequests(ErrClosing)
+
+		// 所有的 Watcher 也会收到 ErrClosing 消息
 		conn.invalidateWatches(ErrClosing)
+
+		// 发送关闭信号
 		close(conn.eventChan)
 	}()
+
+
 	return conn, ec, nil
 }
+
+
+
+
 
 // WithDialer returns a connection option specifying a non-default Dialer.
 func WithDialer(dialer Dialer) connOption {
@@ -309,6 +406,8 @@ func WithMaxConnBufferSize(maxBufferSize int) connOption {
 	}
 }
 
+
+
 func (c *Conn) Close() {
 	close(c.shouldQuit)
 
@@ -358,40 +457,68 @@ func (c *Conn) sendEvent(evt Event) {
 	}
 }
 
+
+
+
 func (c *Conn) connect() error {
+
+
 	var retryStart bool
 	for {
+
+		// Next() 返回下一个要连接的服务器 Server 。
 		c.serverMu.Lock()
 		c.server, retryStart = c.hostProvider.Next()
 		c.serverMu.Unlock()
+
+		// 设置状态为 `连接中`
 		c.setState(StateConnecting)
+
+		// 如果 retryStart 为 true ，
 		if retryStart {
+
+			//
 			c.flushUnsentRequests(ErrNoServer)
+
 			select {
+			// 超时 1 秒
 			case <-time.After(time.Second):
 				// pass
+			//
 			case <-c.shouldQuit:
+				// 设置状态为 `断连`
 				c.setState(StateDisconnected)
+				//
 				c.flushUnsentRequests(ErrClosing)
+				//
 				return ErrClosing
 			}
 		}
 
+		// 尝试建立网络连接
+		//（1）若成功，则设置 c.conn 且设置状态为 `已连接`，打印日志并返回
+		//（2）若失败，则打印错误日志，然后继续 for 循环尝试下一次连接
 		zkConn, err := c.dialer("tcp", c.Server(), c.connectTimeout)
 		if err == nil {
 			c.conn = zkConn
 			c.setState(StateConnected)
 			if c.logInfo {
+				// 打印 Info 日志
 				c.logger.Printf("Connected to %s", c.Server())
 			}
 			return nil
 		}
 
+		// 打印 Error 日志
 		c.logger.Printf("Failed to connect to %s: %+v", c.Server(), err)
 	}
+
+
 }
 
 func (c *Conn) resendZkAuth(reauthReadyChan chan struct{}) {
+
+
 	shouldCancel := func() bool {
 		select {
 		case <-c.shouldQuit:
@@ -403,6 +530,7 @@ func (c *Conn) resendZkAuth(reauthReadyChan chan struct{}) {
 		}
 	}
 
+
 	c.credsMu.Lock()
 	defer c.credsMu.Unlock()
 
@@ -411,6 +539,8 @@ func (c *Conn) resendZkAuth(reauthReadyChan chan struct{}) {
 	if c.logInfo {
 		c.logger.Printf("re-submitting `%d` credentials after reconnect", len(c.creds))
 	}
+
+
 
 	for _, cred := range c.creds {
 		if shouldCancel() {
@@ -447,6 +577,8 @@ func (c *Conn) resendZkAuth(reauthReadyChan chan struct{}) {
 			continue
 		}
 	}
+
+
 }
 
 func (c *Conn) sendRequest(
@@ -458,6 +590,9 @@ func (c *Conn) sendRequest(
 	<-chan response,
 	error,
 ) {
+
+
+	//
 	rq := &request{
 		xid:        c.nextXid(),
 		opcode:     opcode,
@@ -467,6 +602,7 @@ func (c *Conn) sendRequest(
 		recvFunc:   recvFunc,
 	}
 
+
 	if err := c.sendData(rq); err != nil {
 		return nil, err
 	}
@@ -474,61 +610,96 @@ func (c *Conn) sendRequest(
 	return rq.recvChan, nil
 }
 
+
+
 func (c *Conn) loop() {
 	for {
+
+		// 1. 建立同 zk-server 的连接
 		if err := c.connect(); err != nil {
 			// c.Close() was called
 			return
 		}
 
+		// 2. 发送 connectRequest{} 给 zk-server ，接收 connectResponse{} 响应，并根据响应更新 c *Conn 的成员变量。
 		err := c.authenticate()
+
 		switch {
+		// 会话过期，需要清理过期会话的 watchers
 		case err == ErrSessionExpired:
 			c.logger.Printf("authentication failed: %s", err)
 			c.invalidateWatches(err)
+		// 对于其它错误，则关闭 conn
 		case err != nil && c.conn != nil:
 			c.logger.Printf("authentication failed: %s", err)
 			c.conn.Close()
+
+		// 连接正常
 		case err == nil:
+
+			// 打印日志
 			if c.logInfo {
 				c.logger.Printf("authenticated: id=%d, timeout=%d", c.SessionID(), c.sessionTimeoutMs)
 			}
+
+			// 标识连接成功
 			c.hostProvider.Connected()        // mark success
+
+
 			c.closeChan = make(chan struct{}) // channel to tell send loop stop
 			reauthChan := make(chan struct{}) // channel to tell send loop that authdata has been resubmitted
 
+
+			// 启动两个 loop ，分别为 c.sendLoop() 和 c.recvLoop(c.conn)
+
 			var wg sync.WaitGroup
-			wg.Add(1)
+			wg.Add(2)
+
+			// 开启 sendLoop
 			go func() {
+
+				// 先阻塞在管道上，等待启动信号
 				<-reauthChan
+
 				if c.debugCloseRecvLoop {
 					close(c.debugReauthDone)
 				}
+
 				err := c.sendLoop()
 				if err != nil || c.logInfo {
 					c.logger.Printf("send loop terminated: err=%v", err)
 				}
+
 				c.conn.Close() // causes recv loop to EOF/exit
 				wg.Done()
+
 			}()
 
-			wg.Add(1)
+
+			// 开启 recvLoop
 			go func() {
+
 				var err error
 				if c.debugCloseRecvLoop {
 					err = errors.New("DEBUG: close recv loop")
 				} else {
 					err = c.recvLoop(c.conn)
 				}
+
+
 				if err != io.EOF || c.logInfo {
 					c.logger.Printf("recv loop terminated: err=%v", err)
 				}
+
 				if err == nil {
 					panic("zk: recvLoop should never return nil error")
 				}
+
+
 				close(c.closeChan) // tell send loop to exit
 				wg.Done()
 			}()
+
 
 			c.resendZkAuth(reauthChan)
 
@@ -536,14 +707,18 @@ func (c *Conn) loop() {
 			wg.Wait()
 		}
 
+
+		// 4. 设置连接状态为 `断连`
 		c.setState(StateDisconnected)
 
+		// 5. 如果收到 shouldQuit, 则准备退出，否则继续 for 循环处理
 		select {
 		case <-c.shouldQuit:
 			c.flushRequests(ErrClosing)
 			return
 		default:
 		}
+
 
 		if err != ErrSessionExpired {
 			err = ErrConnectionClosed
@@ -560,6 +735,13 @@ func (c *Conn) loop() {
 	}
 }
 
+
+
+
+// 处理未发送的 Requests
+//
+// 和 flushRequests 的区别在于: request 来自于 c.sendChan 的 buffer
+
 func (c *Conn) flushUnsentRequests(err error) {
 	for {
 		select {
@@ -574,9 +756,12 @@ func (c *Conn) flushUnsentRequests(err error) {
 // Send error to all pending requests and clear request map
 func (c *Conn) flushRequests(err error) {
 	c.requestsLock.Lock()
+	// c.requests 存储了所有待发送的请求，这里遍历 c.requests 中每个请求，
+	// 直接为每个 request 返回一个错误响应 response{-1, err}
 	for _, req := range c.requests {
 		req.recvChan <- response{-1, err}
 	}
+	// 清空 c.requests
 	c.requests = make(map[int32]*request)
 	c.requestsLock.Unlock()
 }
@@ -585,15 +770,25 @@ func (c *Conn) flushRequests(err error) {
 func (c *Conn) invalidateWatches(err error) {
 	c.watchersLock.Lock()
 	defer c.watchersLock.Unlock()
-
+	// 如果存在 watchers 就逐个处理
 	if len(c.watchers) >= 0 {
+		// 遍历 c.watchers
 		for pathType, watchers := range c.watchers {
-			ev := Event{Type: EventNotWatching, State: StateDisconnected, Path: pathType.path, Err: err}
+			// 构造 StateDisconnected 事件
+			ev := Event{
+				Type: EventNotWatching,
+				State: StateDisconnected,
+				Path: pathType.path,
+				Err: err,
+			}
+			// watchers 是一组事件管道，这里以 StateDisconnected 事件通知管道接收者，然后关闭这个管道。
 			for _, ch := range watchers {
-				ch <- ev
-				close(ch)
+				ch <- ev	// 通知管道接收者
+				close(ch)	// 关闭管道
 			}
 		}
+
+		// 清空所有 c.watchers
 		c.watchers = make(map[watchPathType][]chan Event)
 	}
 }
@@ -678,61 +873,85 @@ func (c *Conn) sendSetWatches() {
 	}()
 }
 
+
+// 发送 connectRequest{} 给 zk-server ，接收 connectResponse{} 响应，并根据响应更新 c *Conn 的成员变量。
+
 func (c *Conn) authenticate() error {
+
+	// packet := len(body) + body
 	buf := make([]byte, 256)
 
+	///// 写
+
 	// Encode and send a connect request.
+	// 序列化 connectRequest{} 对象
 	n, err := encodePacket(buf[4:], &connectRequest{
-		ProtocolVersion: protocolVersion,
-		LastZxidSeen:    c.lastZxid,
-		TimeOut:         c.sessionTimeoutMs,
-		SessionID:       c.SessionID(),
-		Passwd:          c.passwd,
+		ProtocolVersion: protocolVersion,		// 协议版本号
+		LastZxidSeen:    c.lastZxid,			//
+		TimeOut:         c.sessionTimeoutMs, 	// 设置 `会话超时`
+		SessionID:       c.SessionID(), 		// 填入旧的 `会话ID` ，以维持状态的统一
+		Passwd:          c.passwd,				// 填入连接 `密码`
 	})
+
 	if err != nil {
 		return err
 	}
 
+	// packet := len(body) + body
 	binary.BigEndian.PutUint32(buf[:4], uint32(n))
 
+	// 设置写超时
 	if err := c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout * 10)); err != nil {
 		return err
 	}
+	// 执行写操作
 	_, err = c.conn.Write(buf[:n+4])
 	if err != nil {
 		return err
 	}
+	// 重置写超时
 	if err := c.conn.SetWriteDeadline(time.Time{}); err != nil {
 		return err
 	}
 
+
+	///// 读
+
 	// Receive and decode a connect response.
+	// 设置读超时
 	if err := c.conn.SetReadDeadline(time.Now().Add(c.recvTimeout * 10)); err != nil {
 		return err
 	}
+	// 执行读操作，先读四个字节的 len(body)
 	_, err = io.ReadFull(c.conn, buf[:4])
 	if err != nil {
 		return err
 	}
+	// 重置读超时
 	if err := c.conn.SetReadDeadline(time.Time{}); err != nil {
 		return err
 	}
 
+	// 解析 len(body)，检查 buf 是够足够，不够则扩容
 	blen := int(binary.BigEndian.Uint32(buf[:4]))
 	if cap(buf) < blen {
 		buf = make([]byte, blen)
 	}
 
+	// 执行读操作，读取 body
 	_, err = io.ReadFull(c.conn, buf[:blen])
 	if err != nil {
 		return err
 	}
 
+	// 反序列化为 connectResponse{} 对象
 	r := connectResponse{}
 	_, err = decodePacket(buf[:blen], &r)
 	if err != nil {
 		return err
 	}
+
+	// 若 session 过期，则重置 c 的成员变量，同时报错返回
 	if r.SessionID == 0 {
 		atomic.StoreInt64(&c.sessionID, int64(0))
 		c.passwd = emptyPassword
@@ -741,6 +960,8 @@ func (c *Conn) authenticate() error {
 		return ErrSessionExpired
 	}
 
+
+	// 若 session 未过期，则更新 c 的成员变量：`sessionID`, `timeout`, `passwd`, `state`
 	atomic.StoreInt64(&c.sessionID, r.SessionID)
 	c.setTimeouts(r.TimeOut)
 	c.passwd = r.Passwd
@@ -750,23 +971,41 @@ func (c *Conn) authenticate() error {
 }
 
 func (c *Conn) sendData(req *request) error {
-	header := &requestHeader{req.xid, req.opcode}
+
+	// packet := len(body) + body
+	//
+	// body := header + pkt
+	//
+
+
+	// 构造 header
+	header := &requestHeader{
+		Xid: req.xid,
+		Opcode: req.opcode,
+	}
+
+	// 写入 header 到 buf 中，c.buf[4...12] <= header(8B)
 	n, err := encodePacket(c.buf[4:], header)
 	if err != nil {
 		req.recvChan <- response{-1, err}
 		return nil
 	}
 
+	// 写入 pkt 到 buf 中，c.buf[12...] <= req.pkt
 	n2, err := encodePacket(c.buf[4+n:], req.pkt)
 	if err != nil {
 		req.recvChan <- response{-1, err}
 		return nil
 	}
 
+	// len(body) = n + n2
 	n += n2
 
+	// 写入 len(body) 到 buf 首部 4B 中，至此 buf[0, n+4] 中包含完整的请求包
 	binary.BigEndian.PutUint32(c.buf[:4], uint32(n))
 
+
+	// 把请求存放在待发送的请求缓存中
 	c.requestsLock.Lock()
 	select {
 	case <-c.closeChan:
@@ -775,18 +1014,23 @@ func (c *Conn) sendData(req *request) error {
 		return ErrConnectionClosed
 	default:
 	}
-	c.requests[req.xid] = req
+	c.requests[req.xid] = req // 把请求存放在 pending 缓存中
 	c.requestsLock.Unlock()
 
+
+	// 设置写超时
 	if err := c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout)); err != nil {
 		return err
 	}
+	// 执行写操作
 	_, err = c.conn.Write(c.buf[:n+4])
+	// 如果出错则直接写回错误信息到 req.recvChan 中，并关闭 conn
 	if err != nil {
 		req.recvChan <- response{-1, err}
 		c.conn.Close()
 		return err
 	}
+	// 重置写超时
 	if err := c.conn.SetWriteDeadline(time.Time{}); err != nil {
 		return err
 	}
@@ -800,11 +1044,17 @@ func (c *Conn) sendLoop() error {
 
 	for {
 		select {
+
+
 		case req := <-c.sendChan:
+
 			if err := c.sendData(req); err != nil {
 				return err
 			}
+
+
 		case <-pingTicker.C:
+
 			n, err := encodePacket(c.buf[4:], &requestHeader{Xid: -2, Opcode: opPing})
 			if err != nil {
 				panic("zk: opPing should never fail to serialize")
@@ -823,6 +1073,7 @@ func (c *Conn) sendLoop() error {
 			if err := c.conn.SetWriteDeadline(time.Time{}); err != nil {
 				return err
 			}
+
 		case <-c.closeChan:
 			return nil
 		}
@@ -830,22 +1081,41 @@ func (c *Conn) sendLoop() error {
 }
 
 func (c *Conn) recvLoop(conn net.Conn) error {
+
+
 	sz := bufferSize
+
+
 	if c.maxBufferSize > 0 && sz > c.maxBufferSize {
 		sz = c.maxBufferSize
 	}
+
+
 	buf := make([]byte, sz)
+
 	for {
+
+
+
 		// package length
+
+
+
+		// 设置读超时
 		if err := conn.SetReadDeadline(time.Now().Add(c.recvTimeout)); err != nil {
 			c.logger.Printf("failed to set connection deadline: %v", err)
 		}
+
+		// 读取 len(body)
 		_, err := io.ReadFull(conn, buf[:4])
 		if err != nil {
 			return fmt.Errorf("failed to read from connection: %v", err)
 		}
 
+		// 解析 len(body)
 		blen := int(binary.BigEndian.Uint32(buf[:4]))
+
+		// 扩容 buf ，使之足以容纳 body
 		if cap(buf) < blen {
 			if c.maxBufferSize > 0 && blen > c.maxBufferSize {
 				return fmt.Errorf("received packet from server with length %d, which exceeds max buffer size %d", blen, c.maxBufferSize)
@@ -853,33 +1123,49 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 			buf = make([]byte, blen)
 		}
 
+		// 读取 body，body = responseHeader + responseData
 		_, err = io.ReadFull(conn, buf[:blen])
 		if err != nil {
 			return err
 		}
+
+		// 重置读超时
 		if err := conn.SetReadDeadline(time.Time{}); err != nil {
 			return err
 		}
 
+		// 反序列化 responseHeader(16B)
 		res := responseHeader{}
 		_, err = decodePacket(buf[:16], &res)
 		if err != nil {
 			return err
 		}
 
+
+		// Xid 为 -1 时，意味着 zk-server 返回 watcherEvent，需要根据 watcherEvent 类型触发对应的 watcher 。
 		if res.Xid == -1 {
+
+			// 反序列化 watcherEvent{}
 			res := &watcherEvent{}
 			_, err := decodePacket(buf[16:blen], res)
 			if err != nil {
 				return err
 			}
+
+
+			// 结构体转换 watcherEvent{} => Event{}
 			ev := Event{
 				Type:  res.Type,
 				State: res.State,
 				Path:  res.Path,
 				Err:   nil,
 			}
+
+			// 发送事件到 c.eventChan <- ev
 			c.sendEvent(ev)
+
+
+			//
 			wTypes := make([]watchType, 0, 2)
 			switch res.Type {
 			case EventNodeCreated:
@@ -889,6 +1175,9 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 			case EventNodeChildrenChanged:
 				wTypes = append(wTypes, watchTypeChild)
 			}
+
+
+			// 根据不同的 eventType ， 将事件推送到不同的 watcher 上
 			c.watchersLock.Lock()
 			for _, t := range wTypes {
 				wpt := watchPathType{res.Path, t}
@@ -897,18 +1186,27 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 						ch <- ev
 						close(ch)
 					}
+
+					//
 					delete(c.watchers, wpt)
 				}
 			}
 			c.watchersLock.Unlock()
 		} else if res.Xid == -2 {
+
 			// Ping response. Ignore.
+
 		} else if res.Xid < 0 {
+
 			c.logger.Printf("Xid < 0 (%d) but not ping or watcher event", res.Xid)
+
 		} else {
+
+
 			if res.Zxid > 0 {
 				c.lastZxid = res.Zxid
 			}
+
 
 			c.requestsLock.Lock()
 			req, ok := c.requests[res.Xid]
@@ -934,6 +1232,9 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 				}
 			}
 		}
+
+
+
 	}
 }
 
