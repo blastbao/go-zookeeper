@@ -55,7 +55,7 @@ func stringShuffle(s []string) {
 }
 
 // validatePath will make sure a path is valid before sending the request
-// validatePath 在发送请求之前确保路径是有效的。
+// validatePath 在发送请求之前确保路径是有效的，因为 zookeeper 对 path 要严格的要求。
 func validatePath(path string, isSequential bool) error {
 
 

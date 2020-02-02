@@ -80,6 +80,9 @@ type Conn struct {
 	sessionID        int64
 	state            State 		// must be 32-bit aligned
 
+
+
+
 	xid              uint32
 
 
@@ -247,6 +250,35 @@ func ConnectWithDialer(servers []string, sessionTimeout time.Duration, dialer Di
 //
 // Within the session timeout it's possible to reestablish a connection to a different server and keep the same session.
 // This is means any ephemeral nodes and watches are maintained.
+
+
+// Connect 大体逻辑如下：
+
+// 1. 混淆 servers 顺序，避免出现请求热点
+// 2. DNSHostProvider 实现 DNS 查询， 把 host 转换成 address(ip 地址)
+// 3. 开启 goroutine 循环
+//
+//	a. 建立网络连接
+//		(1) 使用轮询的方式，选取ip地址
+//		(2) 如果建联成功， 会打印 2018/03/03 11:26:53 Connected to 127.0.0.1:2181 类似的提示
+//
+//	b. 调用 authenticate， 同 zk-server 协调生成 SessionID ，日志 "2018/03/03 11:26:53 Authenticated: id=99617148944318466，timeout=4000" 中
+//     的 id 就是 sessionId，timeout 是服务端返回的 session 超时时间。根据服务端返回的 timeout 数据设置 pingInterval。
+//
+//	c. 开启两个 goroutine， 一个 sendLoop 循环, 一个 recvLoop 循环
+//
+//	d. sendLoop 循环， 如果有 send 数据则发送数据，否则，根据 pingInterval 时间发送心跳包。
+//
+//	e. recvLoop 循环接收网络数据， 前4个字节是包的长度，根据长度创建 buf 大小，存储收到的数据。
+// 	   返回的头文件中有 Xid 字段，这个是请求传过去的，然后原样返回。
+// 	   所有的 request 会放到一个 map 中，Xid 就是其中的 key 。
+// 	   如果接受到的数据是 watcher 数据，Xid 为 固定值-1，recvLoop 会根据 path 和 watcher 类型查找全局 map 中对应的数据，把 event事件放到对应的channel中。
+// 	   监听事件只生效一次，然后会关闭 channel ，删除 wacher 对象。
+
+
+
+
+
 func Connect(servers []string, sessionTimeout time.Duration, options ...connOption) (*Conn, <-chan Event, error) {
 
 	// 参数检查

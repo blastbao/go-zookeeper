@@ -13,6 +13,8 @@ import (
 //
 // It could be easily extended to re-query DNS periodically or if there is trouble connecting.
 //
+//
+//  DNSHostProvider 实现 DNS 查询，可以把 host 转换成 address(ip 地址)。
 type DNSHostProvider struct {
 	mu         sync.Mutex // Protects everything, so we can add asynchronous updates later.
 	servers    []string
