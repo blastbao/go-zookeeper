@@ -49,6 +49,7 @@ const (
 	watchTypeChild
 )
 
+// watcher 的 key ，由 path 和 type 唯一确定
 type watchPathType struct {
 	path  string
 	wType watchType
@@ -266,7 +267,8 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 	// 混淆 srvs 顺序，避免出现请求热点
 	stringShuffle(srvs) 	// Randomize the order of the servers to avoid creating hotspots
 
-	//
+	// 定义事件管道，该管道会赋值给 conn.eventChan 以接收 zk-server 返回的 event，这个管道作为 `connect()` 的返回值，
+	// 使得 zk-server 返回的 event 能够直接送达给调用者。
 	ec := make(chan Event, eventChanSize)
 
 	conn := &Conn{
@@ -318,6 +320,7 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 	}()
 
 
+	// 这里把 ec 返回给调用者，使调用者能够接收到 zk-server 返回的 zk-event。
 	return conn, ec, nil
 }
 
@@ -446,10 +449,13 @@ func (c *Conn) setState(state State) {
 }
 
 func (c *Conn) sendEvent(evt Event) {
+
+	// 如果指定了事件回调，在发送 event 之前先调用事件回调函数，这个回调函数需要是非阻塞的。
 	if c.eventCallback != nil {
 		c.eventCallback(evt)
 	}
 
+	// 发送 evt 到事件管道，如果发送阻塞则 ignore
 	select {
 	case c.eventChan <- evt:
 	default:
@@ -708,6 +714,8 @@ func (c *Conn) loop() {
 		}
 
 
+
+
 		// 4. 设置连接状态为 `断连`
 		c.setState(StateDisconnected)
 
@@ -718,6 +726,7 @@ func (c *Conn) loop() {
 			return
 		default:
 		}
+
 
 
 		if err != ErrSessionExpired {
@@ -774,6 +783,7 @@ func (c *Conn) invalidateWatches(err error) {
 	if len(c.watchers) >= 0 {
 		// 遍历 c.watchers
 		for pathType, watchers := range c.watchers {
+
 			// 构造 StateDisconnected 事件
 			ev := Event{
 				Type: EventNotWatching,
@@ -781,11 +791,13 @@ func (c *Conn) invalidateWatches(err error) {
 				Path: pathType.path,
 				Err: err,
 			}
+
 			// watchers 是一组事件管道，这里以 StateDisconnected 事件通知管道接收者，然后关闭这个管道。
 			for _, ch := range watchers {
 				ch <- ev	// 通知管道接收者
 				close(ch)	// 关闭管道
 			}
+
 		}
 
 		// 清空所有 c.watchers
@@ -797,9 +809,12 @@ func (c *Conn) sendSetWatches() {
 	c.watchersLock.Lock()
 	defer c.watchersLock.Unlock()
 
+
+
 	if len(c.watchers) == 0 {
 		return
 	}
+
 
 	// NB: A ZK server, by default, rejects packets >1mb. So, if we have too
 	// many watches to reset, we need to break this up into multiple packets
@@ -970,12 +985,16 @@ func (c *Conn) authenticate() error {
 	return nil
 }
 
+
+// 1. 把 req 序列化为 reqPacket
+// 2. 把 req 暂存在 c.requests[req.xid] 缓存中
+// 3. 发送 reqPacket 到 zk-server
 func (c *Conn) sendData(req *request) error {
 
 	// packet := len(body) + body
 	//
 	// body := header + pkt
-	//
+
 
 
 	// 构造 header
@@ -1045,35 +1064,37 @@ func (c *Conn) sendLoop() error {
 	for {
 		select {
 
-
+		//读取待发送的请求，并发送到 zk-server
 		case req := <-c.sendChan:
-
 			if err := c.sendData(req); err != nil {
 				return err
 			}
 
-
+		// 向 zk-server 定时发送心跳包
 		case <-pingTicker.C:
-
+			// 构造心跳包
 			n, err := encodePacket(c.buf[4:], &requestHeader{Xid: -2, Opcode: opPing})
 			if err != nil {
 				panic("zk: opPing should never fail to serialize")
 			}
-
 			binary.BigEndian.PutUint32(c.buf[:4], uint32(n))
 
+			// 设置写超时
 			if err := c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout)); err != nil {
 				return err
 			}
+			// 执行写操作
 			_, err = c.conn.Write(c.buf[:n+4])
 			if err != nil {
 				c.conn.Close()
 				return err
 			}
+			// 重置写超时
 			if err := c.conn.SetWriteDeadline(time.Time{}); err != nil {
 				return err
 			}
 
+		// 退出写循环
 		case <-c.closeChan:
 			return nil
 		}
@@ -1095,12 +1116,6 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 
 	for {
 
-
-
-		// package length
-
-
-
 		// 设置读超时
 		if err := conn.SetReadDeadline(time.Now().Add(c.recvTimeout)); err != nil {
 			c.logger.Printf("failed to set connection deadline: %v", err)
@@ -1115,7 +1130,7 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 		// 解析 len(body)
 		blen := int(binary.BigEndian.Uint32(buf[:4]))
 
-		// 扩容 buf ，使之足以容纳 body
+		// 扩容 buf ，使之足以容纳待接收的 body 部分
 		if cap(buf) < blen {
 			if c.maxBufferSize > 0 && blen > c.maxBufferSize {
 				return fmt.Errorf("received packet from server with length %d, which exceeds max buffer size %d", blen, c.maxBufferSize)
@@ -1134,13 +1149,14 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 			return err
 		}
 
-		// 反序列化 responseHeader(16B)
+		// 先反序列化 responseHeader(16B)
 		res := responseHeader{}
 		_, err = decodePacket(buf[:16], &res)
 		if err != nil {
 			return err
 		}
 
+		// 在反序列化 responseData（如果有的话）....
 
 		// Xid 为 -1 时，意味着 zk-server 返回 watcherEvent，需要根据 watcherEvent 类型触发对应的 watcher 。
 		if res.Xid == -1 {
@@ -1152,7 +1168,6 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 				return err
 			}
 
-
 			// 结构体转换 watcherEvent{} => Event{}
 			ev := Event{
 				Type:  res.Type,
@@ -1161,11 +1176,11 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 				Err:   nil,
 			}
 
-			// 发送事件到 c.eventChan <- ev
+			// 发送事件 ev 到管道 c.eventChan 中，该管道会返回给 `connect()` 函数的调用者，使其能够接收到所有的这些事件。
 			c.sendEvent(ev)
 
 
-			//
+			// 事件类型转换：根据 zk-server 返回的 watcherEvent.Type 确定需要触发的 watchTypes 类型的 watchers
 			wTypes := make([]watchType, 0, 2)
 			switch res.Type {
 			case EventNodeCreated:
@@ -1176,22 +1191,22 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 				wTypes = append(wTypes, watchTypeChild)
 			}
 
-
-			// 根据不同的 eventType ， 将事件推送到不同的 watcher 上
+			// 根据不同的 watchTypes 将事件推送到对应的 watchers 上
 			c.watchersLock.Lock()
 			for _, t := range wTypes {
+				// 先判断是否存在 path + wtype 上的 watcher：若存在，则逐个触发，并删除该 wacher ；否则，continue 。
 				wpt := watchPathType{res.Path, t}
 				if watchers, ok := c.watchers[wpt]; ok {
 					for _, ch := range watchers {
 						ch <- ev
 						close(ch)
 					}
-
-					//
 					delete(c.watchers, wpt)
 				}
 			}
 			c.watchersLock.Unlock()
+
+
 		} else if res.Xid == -2 {
 
 			// Ping response. Ignore.
@@ -1223,9 +1238,12 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 				} else {
 					_, err = decodePacket(buf[16:blen], req.recvStruct)
 				}
+
+
 				if req.recvFunc != nil {
 					req.recvFunc(req, &res, err)
 				}
+
 				req.recvChan <- response{res.Zxid, err}
 				if req.opcode == opClose {
 					return io.EOF
@@ -1238,7 +1256,9 @@ func (c *Conn) recvLoop(conn net.Conn) error {
 	}
 }
 
+
 func (c *Conn) nextXid() int32 {
+	// 掩码 0x 7f ff ff ff 确保了 uint32 + 1 不会溢出 int32 取值范围。
 	return int32(atomic.AddUint32(&c.xid, 1) & 0x7fffffff)
 }
 
@@ -1246,31 +1266,51 @@ func (c *Conn) addWatcher(path string, watchType watchType) <-chan Event {
 	c.watchersLock.Lock()
 	defer c.watchersLock.Unlock()
 
+	// 创建管道 ch ，它会作为 `事件通知管道` 返回给调用者，当事件发生时，会通过此管道把 event 发送给调用者。
 	ch := make(chan Event, 1)
+
+	// 构造 watcher 的 key ，是由 path 和 type 唯一确定的
 	wpt := watchPathType{path, watchType}
+
+	// 把管道 ch 绑定到 wpt 上，当 wpt 类型事件发生时，会遍历该类型所有绑定的管道，逐个将 ev 发送给它们。
 	c.watchers[wpt] = append(c.watchers[wpt], ch)
 	return ch
 }
 
+
 func (c *Conn) queueRequest(opcode int32, req interface{}, res interface{}, recvFunc func(*request, *responseHeader, error)) <-chan response {
+	// 1. 构造请求
 	rq := &request{
 		xid:        c.nextXid(),
 		opcode:     opcode,
 		pkt:        req,
-		recvStruct: res,
-		recvChan:   make(chan response, 1),
-		recvFunc:   recvFunc,
+		recvStruct: res,					//
+		recvChan:   make(chan response, 1), // 接收响应的管道
+		recvFunc:   recvFunc,				//
 	}
+	// 2. 发送请求到 `待发送管道`
 	c.sendChan <- rq
+	// 3. 返回 `请求响应管道`，用于接收 rq 的响应
 	return rq.recvChan
 }
 
+
+
+
 func (c *Conn) request(opcode int32, req interface{}, res interface{}, recvFunc func(*request, *responseHeader, error)) (int64, error) {
-	r := <-c.queueRequest(opcode, req, res, recvFunc)
+	// r := <-c.queueRequest(opcode, req, res, recvFunc)
+	// 1. 发送请求，返回响应接收管道
+	resCh := c.queueRequest(opcode, req, res, recvFunc)
+	// 2. 从响应管道接收响应（阻塞式）
+	r := <- resCh
+	// 3. 返回请求 xid 和 错误信息
 	return r.zxid, r.err
 }
 
 func (c *Conn) AddAuth(scheme string, auth []byte) error {
+
+
+
 	_, err := c.request(opSetAuth, &setAuthRequest{Type: 0, Scheme: scheme, Auth: auth}, &setAuthResponse{}, nil)
 
 	if err != nil {
@@ -1280,10 +1320,11 @@ func (c *Conn) AddAuth(scheme string, auth []byte) error {
 	// Remember authdata so that it can be re-submitted on reconnect
 	//
 	// FIXME(prozlach): For now we treat "userfoo:passbar" and "userfoo:passbar2"
-	// as two different entries, which will be re-submitted on reconnet. Some
-	// research is needed on how ZK treats these cases and
-	// then maybe switch to something like "map[username] = password" to allow
-	// only single password for given user with users being unique.
+	// as two different entries, which will be re-submitted on reconnet.
+	//
+	// Some research is needed on how ZK treats these cases and then maybe switch to
+	// something like "map[username] = password" to allow only single password for given
+	// user with users being unique.
 	obj := authCreds{
 		scheme: scheme,
 		auth:   auth,
@@ -1297,30 +1338,42 @@ func (c *Conn) AddAuth(scheme string, auth []byte) error {
 }
 
 func (c *Conn) Children(path string) ([]string, *Stat, error) {
+	// 在发送请求之前确保路径是有效的
 	if err := validatePath(path, false); err != nil {
 		return nil, nil, err
 	}
-
+	// 构造响应结构体
 	res := &getChildren2Response{}
+	// 发送请求，并阻塞式等待请求响应
 	_, err := c.request(opGetChildren2, &getChildren2Request{Path: path, Watch: false}, res, nil)
+	// 返回请求响应结果
 	return res.Children, &res.Stat, err
 }
 
 func (c *Conn) ChildrenW(path string) ([]string, *Stat, <-chan Event, error) {
+
+	// 在发送请求之前确保路径是有效的
 	if err := validatePath(path, false); err != nil {
 		return nil, nil, nil, err
 	}
 
 	var ech <-chan Event
+
+	// 构造响应结构体
 	res := &getChildren2Response{}
+
+	// 发送请求，并阻塞式等待请求响应，这里设置了响应回调，当接收响应时会先调用该回调函数，这里利于闭包的特性，给 ech 赋值。
 	_, err := c.request(opGetChildren2, &getChildren2Request{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
+		// 如果请求成功，则添加 watcher 来监听 path 上的 watchTypeChild 类型事件，返回一个事件通知管道 ech 。
 		if err == nil {
 			ech = c.addWatcher(path, watchTypeChild)
 		}
 	})
+
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
 	return res.Children, &res.Stat, ech, err
 }
 

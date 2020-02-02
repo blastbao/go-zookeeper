@@ -55,7 +55,10 @@ func stringShuffle(s []string) {
 }
 
 // validatePath will make sure a path is valid before sending the request
+// validatePath 在发送请求之前确保路径是有效的。
 func validatePath(path string, isSequential bool) error {
+
+
 	if path == "" {
 		return ErrInvalidPath
 	}
@@ -63,6 +66,7 @@ func validatePath(path string, isSequential bool) error {
 	if path[0] != '/' {
 		return ErrInvalidPath
 	}
+
 
 	n := len(path)
 	if n == 1 {
@@ -74,8 +78,7 @@ func validatePath(path string, isSequential bool) error {
 		return ErrInvalidPath
 	}
 
-	// Start at rune 1 since we already know that the first character is
-	// a '/'.
+	// Start at rune 1 since we already know that the first character is a '/'.
 	for i, w := 1, 0; i < n; i += w {
 		r, width := utf8.DecodeRuneInString(path[i:])
 		switch {
