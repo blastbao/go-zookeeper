@@ -12,15 +12,26 @@ import (
 	"time"
 )
 
-// FLWSrvr is a FourLetterWord helper function. In particular, this function pulls the srvr output
-// from the zookeeper instances and parses the output. A slice of *ServerStats structs are returned
-// as well as a boolean value to indicate whether this function processed successfully.
+
+
+
+
+// FLWSrvr is a FourLetterWord helper function.
 //
-// If the boolean value is false there was a problem. If the *ServerStats slice is empty or nil,
-// then the error happened before we started to obtain 'srvr' values. Otherwise, one of the
-// servers had an issue and the "Error" value in the struct should be inspected to determine
+// In particular, this function pulls the srvr output from the zookeeper instances and parses the output.
+//
+// A slice of *ServerStats structs are returned as well as a boolean value to indicate whether this
+// function processed successfully.
+//
+// If the boolean value is false there was a problem.
+//
+// If the *ServerStats slice is empty or nil, then the error happened before we started to obtain 'srvr' values.
+// Otherwise, one of the servers had an issue and the "Error" value in the struct should be inspected to determine
 // which server had the issue.
+//
+//
 func FLWSrvr(servers []string, timeout time.Duration) ([]*ServerStats, bool) {
+
 	// different parts of the regular expression that are required to parse the srvr output
 	const (
 		zrVer   = `^Zookeeper version: ([A-Za-z0-9\.\-]+), built on (\d\d/\d\d/\d\d\d\d \d\d:\d\d [A-Za-z0-9:\+\-]+)`
@@ -29,17 +40,21 @@ func FLWSrvr(servers []string, timeout time.Duration) ([]*ServerStats, bool) {
 		zrState = `^Zxid: (0x[A-Za-z0-9]+).*\n^Mode: (\w+).*\n^Node count: (\d+)`
 	)
 
+
 	// build the regex from the pieces above
 	re, err := regexp.Compile(fmt.Sprintf(`(?m:\A%v.*\n%v.*\n%v.*\n%v)`, zrVer, zrLat, zrNet, zrState))
 	if err != nil {
 		return nil, false
 	}
 
+
 	imOk := true
 	servers = FormatServers(servers)
 	ss := make([]*ServerStats, len(servers))
 
 	for i := range ss {
+
+		//
 		response, err := fourLetterWord(servers[i], "srvr", timeout)
 
 		if err != nil {
@@ -72,6 +87,7 @@ func FLWSrvr(servers []string, timeout time.Duration) ([]*ServerStats, bool) {
 			srvrMode = ModeUnknown
 		}
 
+
 		buildTime, err := time.Parse("01/02/2006 15:04 MST", match[1])
 
 		if err != nil {
@@ -88,23 +104,25 @@ func FLWSrvr(servers []string, timeout time.Duration) ([]*ServerStats, bool) {
 			continue
 		}
 
-		// the ZxID value is an int64 with two int32s packed inside
-		// the high int32 is the epoch (i.e., number of leader elections)
-		// the low int32 is the counter
-		epoch := int32(parsedInt >> 32)
+		// the ZxID value is an int64 with two int32s packed inside:
+		//	(1) the high int32 is the epoch (i.e., number of leader elections)
+		// 	(2) the low int32 is the counter
+		epoch   := int32(parsedInt >> 32)
 		counter := int32(parsedInt & 0xFFFFFFFF)
+
 
 		// within the regex above, these values must be numerical
 		// so we can avoid useless checking of the error return value
 		minLatency, _ := strconv.ParseInt(match[2], 0, 64)
 		avgLatency, _ := strconv.ParseInt(match[3], 0, 64)
 		maxLatency, _ := strconv.ParseInt(match[4], 0, 64)
-		recv, _ := strconv.ParseInt(match[5], 0, 64)
-		sent, _ := strconv.ParseInt(match[6], 0, 64)
-		cons, _ := strconv.ParseInt(match[7], 0, 64)
-		outs, _ := strconv.ParseInt(match[8], 0, 64)
-		ncnt, _ := strconv.ParseInt(match[11], 0, 64)
+		recv, _ 	  := strconv.ParseInt(match[5], 0, 64)
+		sent, _ 	  := strconv.ParseInt(match[6], 0, 64)
+		cons, _ 	  := strconv.ParseInt(match[7], 0, 64)
+		outs, _ 	  := strconv.ParseInt(match[8], 0, 64)
+		ncnt, _ 	  := strconv.ParseInt(match[11],0, 64)
 
+		//
 		ss[i] = &ServerStats{
 			Sent:        sent,
 			Received:    recv,
@@ -125,9 +143,11 @@ func FLWSrvr(servers []string, timeout time.Duration) ([]*ServerStats, bool) {
 	return ss, imOk
 }
 
-// FLWRuok is a FourLetterWord helper function. In particular, this function
-// pulls the ruok output from each server.
+// FLWRuok is a FourLetterWord helper function.
+//
+// In particular, this function pulls the ruok output from each server.
 func FLWRuok(servers []string, timeout time.Duration) []bool {
+
 	servers = FormatServers(servers)
 	oks := make([]bool, len(servers))
 
@@ -145,12 +165,14 @@ func FLWRuok(servers []string, timeout time.Duration) []bool {
 	return oks
 }
 
-// FLWCons is a FourLetterWord helper function. In particular, this function
-// pulls the ruok output from each server.
+// FLWCons is a FourLetterWord helper function.
 //
-// As with FLWSrvr, the boolean value indicates whether one of the requests had
-// an issue. The Clients struct has an Error value that can be checked.
+// In particular, this function pulls the ruok output from each server.
+//
+// As with FLWSrvr, the boolean value indicates whether one of the requests had an issue.
+// The Clients struct has an Error value that can be checked.
 func FLWCons(servers []string, timeout time.Duration) ([]*ServerClients, bool) {
+
 	const (
 		zrAddr = `^ /((?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):(?:\d+))\[\d+\]`
 		zrPac  = `\(queued=(\d+),recved=(\d+),sent=(\d+),sid=(0x[A-Za-z0-9]+),lop=(\w+),est=(\d+),to=(\d+),`
@@ -197,19 +219,19 @@ func FLWCons(servers []string, timeout time.Duration) ([]*ServerClients, bool) {
 
 			match := m[0][1:]
 
-			queued, _ := strconv.ParseInt(match[1], 0, 64)
-			recvd, _ := strconv.ParseInt(match[2], 0, 64)
-			sent, _ := strconv.ParseInt(match[3], 0, 64)
-			sid, _ := strconv.ParseInt(match[4], 0, 64)
-			est, _ := strconv.ParseInt(match[6], 0, 64)
-			timeout, _ := strconv.ParseInt(match[7], 0, 32)
-			lcxid, _ := parseInt64(match[8])
-			lzxid, _ := parseInt64(match[9])
-			lresp, _ := strconv.ParseInt(match[10], 0, 64)
-			llat, _ := strconv.ParseInt(match[11], 0, 32)
-			minlat, _ := strconv.ParseInt(match[12], 0, 32)
-			avglat, _ := strconv.ParseInt(match[13], 0, 32)
-			maxlat, _ := strconv.ParseInt(match[14], 0, 32)
+			queued, _ 	:= strconv.ParseInt(match[1], 0, 64)
+			recvd, _ 	:= strconv.ParseInt(match[2], 0, 64)
+			sent, _ 	:= strconv.ParseInt(match[3], 0, 64)
+			sid, _ 		:= strconv.ParseInt(match[4], 0, 64)
+			est, _ 		:= strconv.ParseInt(match[6], 0, 64)
+			timeout, _ 	:= strconv.ParseInt(match[7], 0, 32)
+			lcxid, _ 	:= parseInt64(match[8])
+			lzxid, _ 	:= parseInt64(match[9])
+			lresp, _ 	:= strconv.ParseInt(match[10], 0, 64)
+			llat, _ 	:= strconv.ParseInt(match[11], 0, 32)
+			minlat, _ 	:= strconv.ParseInt(match[12], 0, 32)
+			avglat, _ 	:= strconv.ParseInt(match[13], 0, 32)
+			maxlat, _ 	:= strconv.ParseInt(match[14], 0, 32)
 
 			clients = append(clients, &ServerClient{
 				Queued:        queued,
@@ -246,6 +268,8 @@ func parseInt64(s string) (int64, error) {
 }
 
 func fourLetterWord(server, command string, timeout time.Duration) ([]byte, error) {
+
+
 	conn, err := net.DialTimeout("tcp", server, timeout)
 	if err != nil {
 		return nil, err
@@ -258,6 +282,7 @@ func fourLetterWord(server, command string, timeout time.Duration) ([]byte, erro
 	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
 		return nil, err
 	}
+
 	_, err = conn.Write([]byte(command))
 	if err != nil {
 		return nil, err

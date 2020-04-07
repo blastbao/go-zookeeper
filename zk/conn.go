@@ -276,9 +276,6 @@ func ConnectWithDialer(servers []string, sessionTimeout time.Duration, dialer Di
 // 	   监听事件只生效一次，然后会关闭 channel ，删除 wacher 对象。
 
 
-
-
-
 func Connect(servers []string, sessionTimeout time.Duration, options ...connOption) (*Conn, <-chan Event, error) {
 
 	// 参数检查
@@ -338,7 +335,7 @@ func Connect(servers []string, sessionTimeout time.Duration, options ...connOpti
 	// 启动主 goroutine
 	go func() {
 
-		//
+		// 阻塞式调用
 		conn.loop()
 
 		// 将已经发送到 zk 的请求处理掉，直接报错: ErrClosing(Close之后, Conn就完事，程序也该关闭了)
@@ -651,6 +648,8 @@ func (c *Conn) sendRequest(
 
 
 func (c *Conn) loop() {
+
+	// 阻塞式调用
 	for {
 
 		// 1. 建立同 zk-server 的连接
@@ -759,8 +758,6 @@ func (c *Conn) loop() {
 		default:
 		}
 
-
-
 		if err != ErrSessionExpired {
 			err = ErrConnectionClosed
 		}
@@ -797,13 +794,16 @@ func (c *Conn) flushUnsentRequests(err error) {
 // Send error to all pending requests and clear request map
 func (c *Conn) flushRequests(err error) {
 	c.requestsLock.Lock()
+
 	// c.requests 存储了所有待发送的请求，这里遍历 c.requests 中每个请求，
 	// 直接为每个 request 返回一个错误响应 response{-1, err}
 	for _, req := range c.requests {
 		req.recvChan <- response{-1, err}
 	}
+
 	// 清空 c.requests
 	c.requests = make(map[int32]*request)
+
 	c.requestsLock.Unlock()
 }
 
@@ -848,16 +848,22 @@ func (c *Conn) sendSetWatches() {
 	}
 
 
-	// NB: A ZK server, by default, rejects packets >1mb. So, if we have too
-	// many watches to reset, we need to break this up into multiple packets
-	// to avoid hitting that limit. Mirroring the Java client behavior: we are
-	// conservative in that we limit requests to 128kb (since server limit is
-	// is actually configurable and could conceivably be configured smaller
-	// than default of 1mb).
+	// NB: A ZK server, by default, rejects packets >1mb.
+	//
+	// So, if we have too many watches to reset,
+	// we need to break this up into multiple packets to avoid hitting that limit.
+	//
+	// Mirroring the Java client behavior:
+	//
+	// we are conservative in that we limit requests to 128kb (since server limit is actually
+	// configurable and could conceivably be configured smaller than default of 1mb).
+	//
 	limit := 128 * 1024
 	if c.setWatchLimit > 0 {
 		limit = c.setWatchLimit
 	}
+
+
 
 	var reqs []*setWatchesRequest
 	var req *setWatchesRequest
@@ -865,27 +871,36 @@ func (c *Conn) sendSetWatches() {
 
 	n := 0
 	for pathType, watchers := range c.watchers {
+
 		if len(watchers) == 0 {
 			continue
 		}
+
 		addlLen := 4 + len(pathType.path)
+
 		if req == nil || sizeSoFar+addlLen > limit {
+
 			if req != nil {
 				// add to set of requests that we'll send
 				reqs = append(reqs, req)
 			}
+
 			sizeSoFar = 28 // fixed overhead of a set-watches packet
+
 			req = &setWatchesRequest{
 				RelativeZxid: c.lastZxid,
 				DataWatches:  make([]string, 0),
 				ExistWatches: make([]string, 0),
 				ChildWatches: make([]string, 0),
 			}
+
 		}
+
+
 		sizeSoFar += addlLen
 		switch pathType.wType {
 		case watchTypeData:
-			req.DataWatches = append(req.DataWatches, pathType.path)
+			req.DataWatches  = append(req.DataWatches,  pathType.path)
 		case watchTypeExist:
 			req.ExistWatches = append(req.ExistWatches, pathType.path)
 		case watchTypeChild:
@@ -893,23 +908,30 @@ func (c *Conn) sendSetWatches() {
 		}
 		n++
 	}
+
+
 	if n == 0 {
 		return
 	}
+
+
 	if req != nil { // don't forget any trailing packet we were building
 		reqs = append(reqs, req)
 	}
+
 
 	if c.setWatchCallback != nil {
 		c.setWatchCallback(reqs)
 	}
 
+
 	go func() {
 		res := &setWatchesResponse{}
-		// TODO: Pipeline these so queue all of them up before waiting on any
-		// response. That will require some investigation to make sure there
-		// aren't failure modes where a blocking write to the channel of requests
-		// could hang indefinitely and cause this goroutine to leak...
+
+		// TODO: Pipeline these so queue all of them up before waiting on any response.
+		// That will require some investigation to make sure there aren't failure modes
+		// where a blocking write to the channel of requests could hang indefinitely and
+		// cause this goroutine to leak...
 		for _, req := range reqs {
 			_, err := c.request(opSetWatches, req, res, nil)
 			if err != nil {

@@ -7,6 +7,7 @@ import (
 )
 
 var (
+
 	zkSrvrOut = `Zookeeper version: 3.4.6-1569965, built on 02/20/2014 09:09 GMT
 Latency min/avg/max: 0/1/10
 Received: 4207
@@ -26,14 +27,19 @@ Node count: 306
 
 func TestFLWRuok(t *testing.T) {
 	t.Parallel()
+
+
+	// build a listen tcp socket
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
 
+	// start listen
 	go tcpServer(l, "")
 
+	//
 	oks := FLWRuok([]string{l.Addr().String()}, time.Second*10)
 	if len(oks) == 0 {
 		t.Errorf("no values returned")
@@ -282,26 +288,35 @@ func TestFLWCons(t *testing.T) {
 	}
 }
 
+
+// start local mock tcp server
 func tcpServer(listener net.Listener, thing string) {
 	for {
+		// listen and accept new connection
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
+
+		// handle requests from conn
 		go connHandler(conn, thing)
 	}
 }
 
 func connHandler(conn net.Conn, thing string) {
+
+	// close connection after handle one request
 	defer conn.Close()
 
 	data := make([]byte, 4)
 
+	// 读取 input
 	_, err := conn.Read(data)
 	if err != nil {
 		return
 	}
 
+	// 解析 input 并处理
 	switch string(data) {
 	case "ruok":
 		switch thing {
