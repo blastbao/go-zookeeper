@@ -127,6 +127,7 @@ type Conn struct {
 	watchersLock sync.Mutex
 
 
+	// 如果 recvLoop 协程返回错误，则会 close(closeChan) 停止 zk 读写
 	closeChan    chan struct{} // channel to tell send loop stop
 
 	// Debug (used by unit tests)
@@ -1081,6 +1082,7 @@ func (c *Conn) sendData(req *request) error {
 	// 把请求存放在待发送的请求缓存中
 	c.requestsLock.Lock()
 	select {
+	// 如果读协程已经关闭，则写协程也会退出，因此不能再发送请求，这里直接返回响应
 	case <-c.closeChan:
 		req.recvChan <- response{-1, ErrConnectionClosed}
 		c.requestsLock.Unlock()
@@ -1095,14 +1097,17 @@ func (c *Conn) sendData(req *request) error {
 	if err := c.conn.SetWriteDeadline(time.Now().Add(c.recvTimeout)); err != nil {
 		return err
 	}
+
 	// 执行写操作
 	_, err = c.conn.Write(c.buf[:n+4])
-	// 如果出错则直接写回错误信息到 req.recvChan 中，并关闭 conn
+
+	// 如果写出错则直接写错误信息到 req.recvChan 中，并关闭 conn
 	if err != nil {
 		req.recvChan <- response{-1, err}
 		c.conn.Close()
 		return err
 	}
+
 	// 重置写超时
 	if err := c.conn.SetWriteDeadline(time.Time{}); err != nil {
 		return err
@@ -1539,6 +1544,7 @@ func (c *Conn) Delete(path string, version int32) error {
 }
 
 func (c *Conn) Exists(path string) (bool, *Stat, error) {
+
 	if err := validatePath(path, false); err != nil {
 		return false, nil, err
 	}
@@ -1558,8 +1564,10 @@ func (c *Conn) ExistsW(path string) (bool, *Stat, <-chan Event, error) {
 		return false, nil, nil, err
 	}
 
+
 	var ech <-chan Event
 	res := &existsResponse{}
+
 	_, err := c.request(opExists, &existsRequest{Path: path, Watch: true}, res, func(req *request, res *responseHeader, err error) {
 		if err == nil {
 			ech = c.addWatcher(path, watchTypeData)
@@ -1567,6 +1575,7 @@ func (c *Conn) ExistsW(path string) (bool, *Stat, <-chan Event, error) {
 			ech = c.addWatcher(path, watchTypeExist)
 		}
 	})
+
 	exists := true
 	if err == ErrNoNode {
 		exists = false
@@ -1588,6 +1597,7 @@ func (c *Conn) GetACL(path string) ([]ACL, *Stat, error) {
 	return res.Acl, &res.Stat, err
 }
 func (c *Conn) SetACL(path string, acl []ACL, version int32) (*Stat, error) {
+
 	if err := validatePath(path, false); err != nil {
 		return nil, err
 	}
@@ -1613,14 +1623,16 @@ type MultiResponse struct {
 	Error  error
 }
 
-// Multi executes multiple ZooKeeper operations or none of them. The provided
-// ops must be one of *CreateRequest, *DeleteRequest, *SetDataRequest, or
-// *CheckVersionRequest.
+// Multi executes multiple ZooKeeper operations or none of them.
+//
+// The provided ops must be one of *CreateRequest, *DeleteRequest, *SetDataRequest, or *CheckVersionRequest.
 func (c *Conn) Multi(ops ...interface{}) ([]MultiResponse, error) {
+
 	req := &multiRequest{
 		Ops:        make([]multiRequestOp, 0, len(ops)),
 		DoneHeader: multiHeader{Type: -1, Done: true, Err: -1},
 	}
+
 	for _, op := range ops {
 		var opCode int32
 		switch op.(type) {
@@ -1637,6 +1649,7 @@ func (c *Conn) Multi(ops ...interface{}) ([]MultiResponse, error) {
 		}
 		req.Ops = append(req.Ops, multiRequestOp{multiHeader{opCode, false, -1}, op})
 	}
+
 	res := &multiResponse{}
 	_, err := c.request(opMulti, req, res, nil)
 	mr := make([]MultiResponse, len(res.Ops))
