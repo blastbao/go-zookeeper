@@ -45,11 +45,12 @@ const (
 	EventNodeDeleted         EventType = 2
 	// 节点数据变更
 	EventNodeDataChanged     EventType = 3
-	// 子节点变更
+	// 子节点数量变更
 	EventNodeChildrenChanged EventType = 4
 
 	// session 事件
 	EventSession     EventType = -1
+	// watch 移除
 	EventNotWatching EventType = -2
 )
 
